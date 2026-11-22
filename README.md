@@ -1,6 +1,6 @@
 # cozyhome-ha-client
 
-A small Kotlin client for Home Assistant: the connection layer behind
+A small Home Assistant client in Kotlin, with a Swift package for iOS: the connection layer behind
 [Cozy Home Widgets](https://weenjahq.com/cozy-home), published so you can read how the app talks to your Home
 Assistant.
 
@@ -13,7 +13,8 @@ It covers:
   the read-only scan of areas, floors, devices, entities, labels, favorites and energy prefs.
 - **JSON and models**: a strict RFC 8259 parser and the entity and registry types.
 
-No dependencies beyond the Kotlin standard library and the JDK.
+No dependencies beyond the Kotlin standard library and the JDK. The Swift package in [`swift/`](swift) uses only
+Foundation and Security; see [Swift (iOS)](#swift-ios).
 
 ## What it promises
 
@@ -23,7 +24,8 @@ No dependencies beyond the Kotlin standard library and the JDK.
   never leaves your Home Assistant. Redirects are not followed.
 - TLS uses the platform trust store with hostname verification. There is no switch to turn it off.
 - Every scan command works for a non-admin user.
-- Tokens are never logged, and `toString()` on token types leaves them out.
+- Tokens are never logged, and `toString()` on token types (in Swift: `description`, `debugDescription` and
+  `dump()`) leaves them out.
 
 ## Usage
 
@@ -68,6 +70,67 @@ fun main() {
 For a real app, implement `TokenStore` on top of your platform's private storage. On Android, keep
 that storage out of cloud backup and device transfer with `dataExtractionRules`.
 
+## Swift (iOS)
+
+`swift/` is a Swift package for iOS 17 and macOS 14: OAuth and long-lived tokens, the REST calls, the WebSocket
+login and commands over `URLSessionWebSocketTask`, and a Keychain token store. It is written for Swift 6 strict
+concurrency: `TokenManager` and `HASession` are actors, everything else is `Sendable`. The promises above hold for
+it too.
+
+```swift
+import CozyHomeHAClient
+
+let store = KeychainTokenStore(
+    service: "com.example.lights",
+    accessGroup: "group.com.example.lights",
+    settingsSuiteName: "group.com.example.lights"
+)
+let tokens = TokenManager(tokenStore: store)
+
+/// Login: load `login.authorizeURL(for:)` in a WKWebView, and when `login.isRedirect(_:for:)`
+/// is true for a navigation, cancel it and pass its URL here.
+func finishLogin(redirect: URL, baseURL: String) async throws {
+    let login = OAuthLogin(tokenStore: store)
+    guard let code = login.authorizationCode(from: redirect) else { return } // the user cancelled
+    try await login.exchangeCode(code, baseURL: baseURL)
+}
+
+func toggleKitchenLight() async throws {
+    // REST: every light's state, then a service call.
+    let rest = HARestClient(tokenStore: store, tokenManager: tokens)
+    for state in try await rest.states().arrayValue {
+        guard let entityID = state["entity_id"]?.stringValue, entityID.hasPrefix("light.") else { continue }
+        print("\(entityID): \(state["state"]?.stringValue ?? "unknown")")
+    }
+    try await rest.callService(domain: "light", service: "toggle", data: ["entity_id": "light.kitchen"])
+
+    // WebSocket: log in once, run commands, close.
+    let websocket = HAWebSocketClient(tokenStore: store, tokenManager: tokens)
+    let areas = try await websocket.withSession { session in
+        print("Connected to Home Assistant \(session.haVersion ?? "")")
+        return try await session.call(HACommand("config/area_registry/list"))
+    }
+    print("\(areas?.arrayValue.count ?? 0) areas")
+}
+```
+
+`KeychainTokenStore` stores the login the way the app does: one generic-password item with
+`kSecAttrAccessibleAfterFirstUnlock`, because the widgets refresh and run buttons while the phone is locked
+(StandBy, Lock Screen). That class is not `ThisDeviceOnly`, so the login is part of an encrypted backup and comes
+back when that backup is restored onto a new phone; it is not synchronized through iCloud Keychain. The doc comment
+on the type has the details.
+
+| Folder in `swift/Sources/CozyHomeHAClient` | What it holds |
+|---|---|
+| `Auth` | `TokenStore`, `InMemoryTokenStore`, `KeychainTokenStore`, `OAuthLogin`, `TokenManager` |
+| `REST` | `HARestClient` and its `URLSession` transport (no redirects, capped bodies) |
+| `WebSocket` | `HAWebSocketClient`, `HASession`, `HAMessages` |
+| top level | `HAError`, `JSONValue` |
+
+In the app, the iOS side is split differently: the networking and Keychain code is Swift like this package, while
+JSON, the models and the WebSocket messages come from the app's Kotlin core, built as an XCFramework. The package
+here carries small Swift versions of those parts instead, so it builds with nothing but Xcode.
+
 ## Layout
 
 | Package | What it holds |
@@ -89,12 +152,21 @@ JDK 17 or newer:
 The tests run against local fake servers (a scripted WebSocket server and the JDK's HTTP server).
 They need no Home Assistant and no network.
 
+The Swift package needs Xcode 16.3 or newer (Swift 6.1):
+
+```
+cd swift && swift build && swift test
+```
+
+Its tests answer HTTP through a `URLProtocol` stub and play the WebSocket server from a script, so they need no
+network either.
+
 ## Relationship to the app
 
 The Android and iOS apps keep their own platform copies of this code (Android types, coroutines,
-a disk cache for images). This library follows the same design on the plain JVM. Where a review
-found something to tighten, this library has the stricter version, and those changes go into the
-apps as well.
+a disk cache for images). This library follows the same design on the plain JVM, and the Swift package follows
+the iOS app's `URLSession` and Keychain code. Where a review found something to tighten, this repository has the
+stricter version, and those changes go into the apps as well.
 
 The apps' widgets, widget builder, auto-setup rules, icons and artwork are not part of this
 repository. See [NOTICE.md](NOTICE.md).
