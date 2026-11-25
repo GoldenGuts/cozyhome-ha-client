@@ -41,6 +41,57 @@ class OAuthLoginTest {
     }
 
     @Test
+    fun `redirect is matched after the login page normalises the URL`() {
+        val login = OAuthLogin(InMemoryTokenStore(), clock)
+        val query = "?code=abc&state=cozyhome"
+
+        assertTrue(login.isRedirect("http://HomeAssistant.local:8123", "http://homeassistant.local:8123/cozyhome/callback$query"))
+        assertTrue(login.isRedirect("https://ha.example.com:443", "https://ha.example.com/cozyhome/callback$query"))
+        assertTrue(login.isRedirect("https://ha.example.com/base/", "https://ha.example.com/base/cozyhome/callback$query"))
+        assertFalse(login.isRedirect("https://ha.example.com", "http://ha.example.com/cozyhome/callback$query"))
+        assertFalse(login.isRedirect("https://ha.example.com", "https://ha.example.com:8443/cozyhome/callback$query"))
+        assertFalse(login.isRedirect("https://ha.example.com", "https://ha.example.com@evil.example/cozyhome/callback$query"))
+    }
+
+    @Test
+    fun `browser login uses the client page and its own state`() {
+        val login = OAuthLogin(InMemoryTokenStore(), clock)
+        val client = BrowserClient("https://example.com/login", "exampleapp://auth-callback", "s1")
+
+        val expected = "https://ha.example.com/auth/authorize?response_type=code" +
+            "&client_id=https%3A%2F%2Fexample.com%2Flogin" +
+            "&redirect_uri=exampleapp%3A%2F%2Fauth-callback" +
+            "&state=s1"
+        assertEquals(expected, login.authorizeUrl("https://ha.example.com/", client))
+        assertEquals("abc", login.authorizationCode("exampleapp://auth-callback?code=abc&state=s1", client))
+        assertNull(login.authorizationCode("exampleapp://auth-callback?code=abc&state=other", client))
+        assertNull(login.authorizationCode("exampleapp://auth-callback?code=abc", client))
+        assertNull(login.authorizationCode("exampleapp://auth-callback?state=s1", client))
+        assertNull(login.authorizationCode("otherapp://auth-callback?code=abc&state=s1", client))
+    }
+
+    @Test
+    fun `each browser login has a new state`() {
+        val first = BrowserClient("https://example.com/login", "exampleapp://auth-callback")
+        val second = BrowserClient("https://example.com/login", "exampleapp://auth-callback")
+
+        assertFalse(first.state == second.state)
+    }
+
+    @Test
+    fun `browser code exchange sends and stores the client page as client id`() {
+        val tokenAnswer = """{"access_token":"access-1","expires_in":1800,"refresh_token":"refresh-1"}"""
+        LocalHaServer { CannedResponse.json(200, tokenAnswer) }.use { server ->
+            val store = InMemoryTokenStore()
+
+            OAuthLogin(store, clock).exchangeCode(server.baseUrl, "the-code", "https://example.com/login")
+
+            assertEquals("https://example.com/login", decodeForm(server.requests.single().body)["client_id"])
+            assertEquals("https://example.com/login", store.oAuthTokens?.clientId)
+        }
+    }
+
+    @Test
     fun `a malformed code is read as no code`() {
         val login = OAuthLogin(InMemoryTokenStore(), clock)
 

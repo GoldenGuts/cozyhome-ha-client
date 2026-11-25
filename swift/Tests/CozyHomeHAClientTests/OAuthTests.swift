@@ -26,6 +26,40 @@ struct OAuthLoginURLTests {
         #expect(!login.isRedirect(try #require(URL(string: "https://evil.example/cozyhome/callback?code=abc")), for: base))
     }
 
+    @Test func redirectIsMatchedAfterTheLoginPageNormalisesTheURL() throws {
+        func isRedirect(_ url: String, _ base: String) throws -> Bool {
+            login.isRedirect(try #require(URL(string: url + "/cozyhome/callback?code=abc")), for: base)
+        }
+        #expect(try isRedirect("http://homeassistant.local:8123", "http://HomeAssistant.local:8123"))
+        #expect(try isRedirect("https://ha.example.com", "https://ha.example.com:443"))
+        #expect(try isRedirect("https://ha.example.com/base", "https://ha.example.com/base/"))
+        #expect(try !isRedirect("http://ha.example.com", "https://ha.example.com"))
+        #expect(try !isRedirect("https://ha.example.com:8443", "https://ha.example.com"))
+        #expect(try !isRedirect("https://ha.example.com@evil.example", "https://ha.example.com"))
+    }
+
+    @Test func browserLoginUsesTheClientPageAndItsOwnState() throws {
+        let client = BrowserClient(clientID: "https://example.com/login", redirectURI: "exampleapp://auth-callback", state: "s1")
+        let url = try #require(login.authorizeURL(for: "https://ha.example.com/", client: client))
+        #expect(url.absoluteString == "https://ha.example.com/auth/authorize?response_type=code"
+            + "&client_id=https%3A%2F%2Fexample.com%2Flogin&redirect_uri=exampleapp%3A%2F%2Fauth-callback&state=s1")
+
+        func code(_ callback: String) throws -> String? {
+            login.authorizationCode(from: try #require(URL(string: callback)), client: client)
+        }
+        #expect(try code("exampleapp://auth-callback?code=abc&state=s1") == "abc")
+        #expect(try code("exampleapp://auth-callback?code=abc&state=other") == nil)
+        #expect(try code("exampleapp://auth-callback?code=abc") == nil)
+        #expect(try code("exampleapp://auth-callback?state=s1") == nil)
+        #expect(try code("otherapp://auth-callback?code=abc&state=s1") == nil)
+    }
+
+    @Test func eachBrowserLoginHasANewState() {
+        let first = BrowserClient(clientID: "https://example.com/login", redirectURI: "exampleapp://auth-callback")
+        let second = BrowserClient(clientID: "https://example.com/login", redirectURI: "exampleapp://auth-callback")
+        #expect(first.state != second.state)
+    }
+
     @Test func authorizationCodeIsReadAndDecoded() throws {
         let redirect = try #require(URL(string: "https://ha.example.com/cozyhome/callback?state=cozyhome&code=a%2Bb%3D"))
         #expect(login.authorizationCode(from: redirect) == "a+b=")
@@ -64,6 +98,17 @@ extension StubbedNetworkTests {
                 refreshToken: "refresh-1",
                 clientID: "https://ha.example.com/"
             ))
+        }
+
+        @Test func browserExchangeSendsAndStoresTheClientPage() async throws {
+            StubServer.reset { _ in Fixture.tokenResponse(accessToken: "access-1", expiresIn: 1800, refreshToken: "refresh-1") }
+            let store = InMemoryTokenStore()
+            let login = OAuthLogin(tokenStore: store, transport: StubServer.transport(), now: { Date() })
+
+            try await login.exchangeCode("code", baseURL: Fixture.primaryURL, clientID: "https://example.com/login")
+
+            #expect(StubServer.requests.first?.formFields["client_id"] == "https://example.com/login")
+            #expect(store.oAuthTokens?.clientID == "https://example.com/login")
         }
 
         @Test func rejectedCodeStoresNothing() async throws {

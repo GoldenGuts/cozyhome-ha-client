@@ -27,6 +27,16 @@ Foundation and Security; see [Swift (iOS)](#swift-ios).
 - Tokens are never logged, and `toString()` on token types (in Swift: `description`, `debugDescription` and
   `dump()`) leaves them out.
 
+## Browser login (passkeys)
+
+A WebView cannot use a passkey or security key for your Home Assistant's domain, so the login can also run in the
+system browser. Pass a `BrowserClient` to `authorizeUrl` and `authorizationCode`, and its client ID to
+`exchangeCode`. The callback must carry the random `state` of that login.
+
+Home Assistant accepts an app's callback address only when a public client page lists it. The apps use
+`https://weenjahq.com/cozy-home/login`, which lists `cozyhome://auth-callback`. For this login only, your Home
+Assistant fetches that page over the internet; the library does not. The WebView login needs no such page.
+
 ## Usage
 
 The API blocks, so call it from a background thread (on Android: `Dispatchers.IO`).
@@ -122,7 +132,7 @@ on the type has the details.
 
 | Folder in `swift/Sources/CozyHomeHAClient` | What it holds |
 |---|---|
-| `Auth` | `TokenStore`, `InMemoryTokenStore`, `KeychainTokenStore`, `OAuthLogin`, `TokenManager` |
+| `Auth` | `TokenStore`, `InMemoryTokenStore`, `KeychainTokenStore`, `OAuthLogin`, `BrowserClient`, `TokenManager` |
 | `REST` | `HARestClient` and its `URLSession` transport (no redirects, capped bodies) |
 | `WebSocket` | `HAWebSocketClient`, `HASession`, `HAMessages` |
 | top level | `HAError`, `JSONValue` |
@@ -135,7 +145,7 @@ here carries small Swift versions of those parts instead, so it builds with noth
 
 | Package | What it holds |
 |---|---|
-| `auth` | `TokenStore`, `OAuthLogin`, `TokenManager` |
+| `auth` | `TokenStore`, `OAuthLogin`, `BrowserClient`, `TokenManager` |
 | `rest` | `HaRestClient` over `HttpURLConnection` |
 | `websocket` | `WebSocketConnection` (RFC 6455), `HaSession`, `HaMessages` |
 | `json` | `Json` tree and parser |

@@ -8,7 +8,6 @@ import weenja.cozyhome.ha.firstReachable
 import weenja.cozyhome.ha.json.Json
 import weenja.cozyhome.ha.normalizeBaseUrl
 import java.io.IOException
-import java.net.URI
 
 /**
  * A few endpoints of Home Assistant's [REST API](https://developers.home-assistant.io/docs/api/rest/).
@@ -210,39 +209,11 @@ class HaRestClient(
         const val HTTP_NOT_FOUND = 404
 
         /**
-         * A path on the configured host. `//host/x` is a scheme-relative URL to another host, and anything without
-         * a leading slash could change the host once appended to the base URL (`@evil.example/x`).
+         * A path on the configured host. `//host/x` is a scheme-relative URL to another host, `/\host` is read as
+         * one by lenient parsers, and anything without a leading slash could change the host once appended to the base URL (`@evil.example/x`).
          */
         fun isPathOnly(pathOrUrl: String): Boolean {
-            return pathOrUrl.startsWith("/") && !pathOrUrl.startsWith("//")
-        }
-
-        /**
-         * Compares parsed scheme, host and port. A string-prefix check would accept
-         * `https://ha.example.com.evil.example/` and `https://ha.example.com@evil.example/`.
-         */
-        fun isSameOrigin(baseUrl: String, url: String): Boolean {
-            val base = parseHttpUri(baseUrl) ?: return false
-            val candidate = parseHttpUri(url) ?: return false
-            if (candidate.rawUserInfo != null || candidate.host == null) {
-                return false
-            }
-            return base.scheme.equals(candidate.scheme, ignoreCase = true) &&
-                base.host.equals(candidate.host, ignoreCase = true) &&
-                effectivePort(base) == effectivePort(candidate)
-        }
-
-        fun parseHttpUri(url: String): URI? {
-            val uri = runCatching { URI(url) }.getOrNull() ?: return null
-            val scheme = uri.scheme?.lowercase()
-            return if (scheme == "http" || scheme == "https") uri else null
-        }
-
-        fun effectivePort(uri: URI): Int {
-            if (uri.port != -1) {
-                return uri.port
-            }
-            return if (uri.scheme.equals("https", ignoreCase = true)) 443 else 80
+            return pathOrUrl.startsWith("/") && !pathOrUrl.startsWith("//") && !pathOrUrl.startsWith("/\\")
         }
     }
 }
